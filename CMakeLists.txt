@@ -12,7 +12,7 @@ add_library(SEM182 lib/sem182/sem182.c lib/sem182/sem182.h)
 add_executable(sender src/sender.c src/shared.c src/shared.h)
 target_link_libraries(sender SEM182)
 
-add_executable(receiver src/receiver.c src/shared.c src/shared.h)
+add_executable(receiver src/receiver.c src/shared.c src/shared.h test.c)
 target_link_libraries(receiver SEM182)
 
 if(DOXYGEN_FOUND)
