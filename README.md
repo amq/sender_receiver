@@ -1,0 +1,1 @@
+[![build](https://img.shields.io/travis/amq/sender_receiver.svg)](https://travis-ci.org/amq/sender_receiver)
