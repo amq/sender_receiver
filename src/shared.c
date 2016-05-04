@@ -180,7 +180,7 @@ int write_to_shm(long shm_size, FILE *stream) {
  *
  * @returns
  */
-int read_from_shm(int shm_size) {
+int read_from_shm(long shm_size) {
   if (init(shm_size) == -1) {
     /* errno is set by init */
     return -1;

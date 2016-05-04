@@ -17,5 +17,6 @@
 
 long parse_shm_size(int argc, char *argv[]);
 int write_to_shm(long shm_size, FILE *stream);
+int read_from_shm(long shm_size);
 
 #endif /* _SENDER_RECEIVER_H_ */
