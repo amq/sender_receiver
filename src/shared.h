@@ -2,12 +2,20 @@
 #define _SENDER_RECEIVER_H_
 
 #include <stdio.h>
+#include <semaphore.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <unistd.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include "../lib/sem182/sem182.h"
+#include <errno.h>
 
-void generate_keys(void);
-void init(void);
+#define NAME_LENGTH 16
+/* names expect an unsigned int */
+#define SEM_R_NAME 1000 * getuid() + 0
+#define SEM_W_NAME 1000 * getuid() + 1
+#define SHM_NAME 1000 * getuid() + 2
+
+long parse_shm_size(int argc, char *argv[]);
+int write_to_shm(long shm_size, FILE *stream);
 
 #endif /* _SENDER_RECEIVER_H_ */
