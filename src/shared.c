@@ -9,6 +9,13 @@ sem_t *sem_r_id = SEM_FAILED;
 int shm_id = -1;
 int *shm_address = MAP_FAILED;
 
+/**
+ * @brief
+ *
+ * @param
+ *
+ * @returns
+ */
 long parse_shm_size(int argc, char *argv[]) {
   int opt;
   long shm_size = -1;
@@ -40,9 +47,15 @@ long parse_shm_size(int argc, char *argv[]) {
   return shm_size;
 }
 
-/*
- * this function can be safely called multiple times,
- * both sem_open and shm_open only create the elements if needed
+/**
+ * @brief
+ *
+ * it is safe to call this function multiple times,
+ * sem_open and shm_open only create elements if they don't exist
+ *
+ * @param
+ *
+ * @returns
  */
 int init(long shm_size) {
   char sem_w_name[NAME_LENGTH];
@@ -97,6 +110,13 @@ int init(long shm_size) {
   return 0;
 }
 
+/**
+ * @brief
+ *
+ * @param
+ *
+ * @returns
+ */
 int cleanup(long shm_size) {
   errno = 0;
 
@@ -116,6 +136,13 @@ int cleanup(long shm_size) {
   return 0;
 }
 
+/**
+ * @brief
+ *
+ * @param
+ *
+ * @returns
+ */
 int write_to_shm(long shm_size, FILE *stream) {
   if (init(shm_size) == -1) {
     /* errno is set by init */
@@ -146,6 +173,13 @@ int write_to_shm(long shm_size, FILE *stream) {
   return 0;
 }
 
+/**
+ * @brief
+ *
+ * @param
+ *
+ * @returns
+ */
 int read_from_shm(int shm_size) {
   if (init(shm_size) == -1) {
     /* errno is set by init */

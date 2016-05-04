@@ -7,13 +7,8 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -Wall -Wextra -Wstrict-prototypes
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -fprofile-arcs -ftest-coverage")
 set(CMAKE_EXE_LINKER_FLAGS="-fprofile-arcs -ftest-coverage")
 
-add_library(SEM182 lib/sem182/sem182.c lib/sem182/sem182.h)
-
 add_executable(sender src/sender.c src/shared.c src/shared.h)
-target_link_libraries(sender SEM182)
-
 add_executable(receiver src/receiver.c src/shared.c src/shared.h)
-target_link_libraries(receiver SEM182)
 
 if(DOXYGEN_FOUND)
     add_custom_target(doc

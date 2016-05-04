@@ -2,13 +2,11 @@
 <module type="CPP_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
-      <sourceFolder url="file://$MODULE_DIR$/lib/sem182/sem182.c" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/lib/sem182/sem182.h" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/CMakeLists.txt" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/receiver.c" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/shared.h" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/sender.c" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/shared.c" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/CMakeLists.txt" isTestSource="false" />
     </content>
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="module-library">
