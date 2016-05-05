@@ -118,20 +118,16 @@ int init(long shm_size) {
  * @returns
  */
 int cleanup(long shm_size) {
-  errno = 0;
+  int errno_save = errno;
 
+  /* no error checking, because there is nothing we can do */
   sem_close(sem_w_id);
   sem_close(sem_r_id);
   munmap(shm_address, (size_t)shm_size);
   close(shm_id);
 
-  /*
-   * we are not doing error handling for each function separately,
-   * because then resources after the function would not be closed
-   */
-  if (errno != 0) {
-    return -1;
-  }
+  /* make sure this function does not modify errno */
+  errno = errno_save;
 
   return 0;
 }
@@ -145,6 +141,7 @@ int cleanup(long shm_size) {
  */
 int write_to_shm(long shm_size, FILE *stream) {
   if (init(shm_size) == -1) {
+    cleanup(shm_size);
     /* errno is set by init */
     return -1;
   }
@@ -155,6 +152,8 @@ int write_to_shm(long shm_size, FILE *stream) {
     if (errno == EINTR) {
       continue;
     } else {
+      cleanup(shm_size);
+      /* errno is set by sem_wait */
       return -1;
     }
   }
@@ -162,12 +161,10 @@ int write_to_shm(long shm_size, FILE *stream) {
   /* @todo: write */
 
   /* increment the number of characters */
-  while (sem_post(sem_r_id) == -1) {
-    if (errno == EINTR) {
-      continue;
-    } else {
-      return -1;
-    }
+  if (sem_post(sem_r_id) == -1) {
+    cleanup(shm_size);
+    /* errno is set by sem_post */
+    return -1;
   }
 
   return 0;
@@ -182,15 +179,19 @@ int write_to_shm(long shm_size, FILE *stream) {
  */
 int read_from_shm(long shm_size) {
   if (init(shm_size) == -1) {
+    cleanup(shm_size);
     /* errno is set by init */
     return -1;
   }
 
   /* wait if there are no characters */
   while (sem_wait(sem_r_id) == -1) {
+    /* try again after a signal interrupt */
     if (errno == EINTR) {
       continue;
     } else {
+      cleanup(shm_size);
+      /* errno is set by sem_wait */
       return -1;
     }
   }
@@ -198,12 +199,10 @@ int read_from_shm(long shm_size) {
   /* @todo: read, cleanup after EOF */
 
   /* increment the free space */
-  while (sem_post(sem_w_id) == -1) {
-    if (errno == EINTR) {
-      continue;
-    } else {
-      return -1;
-    }
+  if (sem_post(sem_w_id) == -1) {
+    cleanup(shm_size);
+    /* errno is set by sem_post */
+    return -1;
   }
 
   return 0;
