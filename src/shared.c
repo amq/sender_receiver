@@ -6,8 +6,8 @@ sem_t *sem_w_id = SEM_FAILED;
 /* read semaphore: number of characters left to be read */
 sem_t *sem_r_id = SEM_FAILED;
 
-int shm_id = -1;
-int *shm_address = MAP_FAILED;
+int shm_fd = -1;
+char *shm_address = MAP_FAILED;
 
 /**
  * @brief
@@ -20,6 +20,12 @@ long parse_shm_size(int argc, char *argv[]) {
   int opt;
   long shm_size = -1;
   char *notconv = '\0';
+
+  /* there are no arguments */
+  if (argc < 2) {
+    errno = EINVAL;
+    return -1;
+  }
 
   while ((opt = getopt(argc, argv, "m:")) != -1) {
     switch (opt) {
@@ -38,7 +44,7 @@ long parse_shm_size(int argc, char *argv[]) {
     }
   }
 
-  /* there were some non-option arguments */
+  /* there are non-option arguments */
   if (optind < argc) {
     errno = EINVAL;
     return -1;
@@ -86,21 +92,21 @@ int init(long shm_size) {
   }
 
   /* open a shared memory object */
-  shm_id = shm_open(shm_name, O_CREAT, S_IRUSR | S_IWUSR);
+  shm_fd = shm_open(shm_name, O_CREAT, S_IRUSR | S_IWUSR);
 
-  if (shm_id == -1) {
+  if (shm_fd == -1) {
     /* errno is set by shm_open */
     return -1;
   }
 
   /* set the size of the shared memory object */
-  if (ftruncate(shm_id, shm_size) == -1) {
+  if (ftruncate(shm_fd, shm_size) == -1) {
     /* errno is set by ftruncate */
     return -1;
   }
 
   /* map the memory object so that it can be used */
-  shm_address = mmap(NULL, (size_t)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+  shm_address = mmap(NULL, (size_t)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
 
   if (shm_address == MAP_FAILED) {
     /* errno is set by mmap */
@@ -124,7 +130,7 @@ int cleanup(long shm_size) {
   sem_close(sem_w_id);
   sem_close(sem_r_id);
   munmap(shm_address, (size_t)shm_size);
-  close(shm_id);
+  close(shm_fd);
 
   /* make sure this function does not modify errno */
   errno = errno_save;
@@ -146,7 +152,7 @@ int write_to_shm(long shm_size, FILE *stream) {
     return -1;
   }
 
-  /* wait if there is no space left */
+  /* decrement the free space and wait if 0 */
   while (sem_wait(sem_w_id) == -1) {
     /* try again after a signal interrupt */
     if (errno == EINTR) {
@@ -184,7 +190,7 @@ int read_from_shm(long shm_size) {
     return -1;
   }
 
-  /* wait if there are no characters */
+  /* decrement the number of characters and wait if 0 */
   while (sem_wait(sem_r_id) == -1) {
     /* try again after a signal interrupt */
     if (errno == EINTR) {
