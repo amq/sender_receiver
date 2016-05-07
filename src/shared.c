@@ -1,13 +1,18 @@
 #include "shared.h"
 
 /* write semaphore: free space */
+char sem_w_name[NAME_LENGTH] = "";
 sem_t *sem_w_id = SEM_FAILED;
 
 /* read semaphore: number of characters left to be read */
+char sem_r_name[NAME_LENGTH] = "";
 sem_t *sem_r_id = SEM_FAILED;
 
+char shm_name[NAME_LENGTH] = "";
 int shm_fd = -1;
-char *shm_address = MAP_FAILED;
+int *shm_buffer = MAP_FAILED;
+
+long size = -1;
 
 /**
  * @brief
@@ -17,9 +22,9 @@ char *shm_address = MAP_FAILED;
  * @returns
  */
 long parse_shm_size(int argc, char *argv[]) {
-  int opt;
+  int opt = -1;
   long shm_size = -1;
-  char *notconv = '\0';
+  char *notconv = "";
 
   /* there are no arguments */
   if (argc < 2) {
@@ -44,7 +49,7 @@ long parse_shm_size(int argc, char *argv[]) {
     }
   }
 
-  /* there are non-option arguments */
+  /* there are some non-option arguments */
   if (optind < argc) {
     errno = EINVAL;
     return -1;
@@ -64,19 +69,22 @@ long parse_shm_size(int argc, char *argv[]) {
  * @returns
  */
 int init(long shm_size) {
-  char sem_w_name[NAME_LENGTH];
-  char sem_r_name[NAME_LENGTH];
-  char shm_name[NAME_LENGTH];
+  size = shm_size;
+
+  /* @todo: portability */
+  signal(SIGINT, signal_callback);
+  signal(SIGTERM, signal_callback);
+  signal(SIGHUP, signal_callback);
 
   /* convert the sem/shm number (as defined in spec) to a string */
-  if (sprintf(sem_w_name, "%u", SEM_W_NAME) < 0) {
+  if (sprintf(sem_w_name, "%llu", SEM_W_NAME) < 0) {
     /* errno is set by sprintf */
     return -1;
   }
-  if (sprintf(sem_r_name, "%u", SEM_R_NAME) < 0) {
+  if (sprintf(sem_r_name, "%llu", SEM_R_NAME) < 0) {
     return -1;
   }
-  if (sprintf(shm_name, "%u", SHM_NAME) < 0) {
+  if (sprintf(shm_name, "%llu", SHM_NAME) < 0) {
     return -1;
   }
 
@@ -91,8 +99,9 @@ int init(long shm_size) {
     return -1;
   }
 
+  /* @todo: make sure we understand the options */
   /* open a shared memory object */
-  shm_fd = shm_open(shm_name, O_CREAT, S_IRUSR | S_IWUSR);
+  shm_fd = shm_open(shm_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
 
   if (shm_fd == -1) {
     /* errno is set by shm_open */
@@ -105,10 +114,10 @@ int init(long shm_size) {
     return -1;
   }
 
-  /* map the memory object so that it can be used */
-  shm_address = mmap(NULL, (size_t)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  /* map the memory object so that it can be used, imagine it as malloc */
+  shm_buffer = mmap(NULL, (size_t)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
 
-  if (shm_address == MAP_FAILED) {
+  if (shm_buffer == MAP_FAILED) {
     /* errno is set by mmap */
     return -1;
   }
@@ -123,19 +132,40 @@ int init(long shm_size) {
  *
  * @returns
  */
-int cleanup(long shm_size) {
+int cleanup(void) {
   int errno_save = errno;
 
-  /* no error checking, because there is nothing we can do */
-  sem_close(sem_w_id);
-  sem_close(sem_r_id);
-  munmap(shm_address, (size_t)shm_size);
-  close(shm_fd);
+  if (sem_w_id != SEM_FAILED) {
+    sem_close(sem_w_id);
+    sem_unlink(sem_w_name);
+  }
+
+  if (sem_r_id != SEM_FAILED) {
+    sem_close(sem_r_id);
+    sem_unlink(sem_r_name);
+  }
+
+  if (shm_buffer != MAP_FAILED) {
+    munmap(shm_buffer, (size_t)size);
+  }
+
+  if (shm_fd != -1) {
+    close(shm_fd);
+    shm_unlink(shm_name);
+  }
 
   /* make sure this function does not modify errno */
   errno = errno_save;
 
   return 0;
+}
+
+void signal_callback(int signum) {
+  cleanup();
+
+  fprintf(stderr, "caught signal\n");
+
+  exit(signum);
 }
 
 /**
@@ -146,32 +176,42 @@ int cleanup(long shm_size) {
  * @returns
  */
 int write_to_shm(long shm_size, FILE *stream) {
+  int input = EOF;
+  int position = 0;
+
   if (init(shm_size) == -1) {
-    cleanup(shm_size);
+    cleanup();
     /* errno is set by init */
     return -1;
   }
 
-  /* decrement the free space and wait if 0 */
-  while (sem_wait(sem_w_id) == -1) {
-    /* try again after a signal interrupt */
-    if (errno == EINTR) {
-      continue;
-    } else {
-      cleanup(shm_size);
-      /* errno is set by sem_wait */
+  do {
+    /* decrement the free space and wait if 0 */
+    while (sem_wait(sem_w_id) == -1) {
+      /* try again after a signal interrupt */
+      if (errno == EINTR) {
+        continue;
+      } else {
+        cleanup();
+        /* errno is set by sem_wait */
+        return -1;
+      }
+    }
+
+    input = fgetc(stream);
+    shm_buffer[position++] = input;
+
+    if (position == shm_size) {
+      position = 0;
+    }
+
+    /* increment the number of characters */
+    if (sem_post(sem_r_id) == -1) {
+      cleanup();
+      /* errno is set by sem_post */
       return -1;
     }
-  }
-
-  /* @todo: write */
-
-  /* increment the number of characters */
-  if (sem_post(sem_r_id) == -1) {
-    cleanup(shm_size);
-    /* errno is set by sem_post */
-    return -1;
-  }
+  } while (input != EOF);
 
   return 0;
 }
@@ -184,32 +224,42 @@ int write_to_shm(long shm_size, FILE *stream) {
  * @returns
  */
 int read_from_shm(long shm_size) {
+  int position = 0;
+
   if (init(shm_size) == -1) {
-    cleanup(shm_size);
+    cleanup();
     /* errno is set by init */
     return -1;
   }
 
-  /* decrement the number of characters and wait if 0 */
-  while (sem_wait(sem_r_id) == -1) {
-    /* try again after a signal interrupt */
-    if (errno == EINTR) {
-      continue;
-    } else {
-      cleanup(shm_size);
-      /* errno is set by sem_wait */
+  do {
+    /* decrement the number of characters and wait if 0 */
+    while (sem_wait(sem_r_id) == -1) {
+      /* try again after a signal interrupt */
+      if (errno == EINTR) {
+        continue;
+      } else {
+        cleanup();
+        /* errno is set by sem_wait */
+        return -1;
+      }
+    }
+
+    printf("%c", shm_buffer[position++]);
+
+    if (position == shm_size) {
+      position = 0;
+    }
+
+    /* increment the free space */
+    if (sem_post(sem_w_id) == -1) {
+      cleanup();
+      /* errno is set by sem_post */
       return -1;
     }
-  }
+  } while (shm_buffer[position] != EOF);
 
-  /* @todo: read, cleanup after EOF */
-
-  /* increment the free space */
-  if (sem_post(sem_w_id) == -1) {
-    cleanup(shm_size);
-    /* errno is set by sem_post */
-    return -1;
-  }
+  cleanup();
 
   return 0;
 }
