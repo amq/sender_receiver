@@ -15,11 +15,11 @@
 #define SEM_R_NAME (1000ull * getuid() + 1)
 #define SHM_NAME (1000ull * getuid() + 2)
 
-static long parse_shm_size(int argc, char *argv[]);
-static int init(long shm_size);
-static int cleanup(void);
-static void signal_callback(int signum);
-static int write_to_shm(long shm_size, FILE *stream);
-static int read_from_shm(long shm_size);
+long parse_shm_size(int argc, char *argv[]);
+int init(long shm_size);
+int cleanup(void);
+void signal_callback(int signum);
+int write_to_shm(long shm_size, FILE *stream);
+int read_from_shm(long shm_size);
 
 #endif /* _SENDER_RECEIVER_H_ */
