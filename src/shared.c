@@ -167,7 +167,6 @@ int cleanup(void) {
  */
 void signal_callback(int signum) {
   cleanup();
-
   _exit(signum);
 }
 
