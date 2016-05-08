@@ -1,10 +1,31 @@
 [![build](https://img.shields.io/travis/amq/sender_receiver.svg)](https://travis-ci.org/amq/sender_receiver)
+[![analysis](https://img.shields.io/coverity/scan/8805.svg)](https://scan.coverity.com/projects/amq-sender_receiver)
 
-- A work in progress! It is not intended to work yet
-- POSIX IPC instead of System V
-- POSIX semaphores instead of SEM182
+- POSIX IPC and semaphores
+- Signal handling
 
-Useful links:
+Building
+```
+git clone https://github.com/amq/sender_receiver.git
+cd sender_receiver
+mkdir -p build
+cd build
+cmake ..
+make
+```
+
+Usage
+```
+./sender -m <buffer_size> < data.txt
+./receiver -m <buffer_size>
+```
+
+Manual cleanup after `SIGKILL`
+```
+find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f -delete
+```
+
+Useful links
 - https://github.com/angrave/SystemProgramming/wiki
 - http://www.hildstrom.com/projects/ipc_sysv_posix/index.html
 - http://mij.oltrelinux.com/devel/unixprg/
