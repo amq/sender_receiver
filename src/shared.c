@@ -101,7 +101,8 @@ int init(long shm_size) {
 
   /* @todo: make sure we understand the options */
   /* open a shared memory object */
-  shm_fd = shm_open(shm_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
+  shm_fd = shm_open(shm_name, O_RDWR | O_CREAT,
+                    S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
 
   if (shm_fd == -1) {
     /* errno is set by shm_open */
@@ -109,13 +110,14 @@ int init(long shm_size) {
   }
 
   /* set the size of the shared memory object */
-  if (ftruncate(shm_fd, shm_size) == -1) {
+  if (ftruncate(shm_fd, shm_size * sizeof(*shm_buffer)) == -1) {
     /* errno is set by ftruncate */
     return -1;
   }
 
   /* map the memory object so that it can be used, imagine it as malloc */
-  shm_buffer = mmap(NULL, (size_t)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  shm_buffer = mmap(NULL, (size_t)shm_size * sizeof(*shm_buffer), PROT_READ | PROT_WRITE,
+                    MAP_SHARED, shm_fd, 0);
 
   if (shm_buffer == MAP_FAILED) {
     /* errno is set by mmap */
@@ -156,6 +158,8 @@ int cleanup(void) {
 
   /* make sure this function does not modify errno */
   errno = errno_save;
+
+  fprintf(stderr, "cleanup\n");
 
   return 0;
 }
@@ -199,8 +203,13 @@ int write_to_shm(long shm_size, FILE *stream) {
     }
 
     input = fgetc(stream);
-    shm_buffer[position++] = input;
+    shm_buffer[position] = input;
 
+    printf("shm_buffer[%d] = %d\n", position, shm_buffer[position]);
+
+    position++;
+
+    /* wrap around the ring buffer */
     if (position == shm_size) {
       position = 0;
     }
@@ -224,6 +233,7 @@ int write_to_shm(long shm_size, FILE *stream) {
  * @returns
  */
 int read_from_shm(long shm_size) {
+  int output = EOF;
   int position = 0;
 
   if (init(shm_size) == -1) {
@@ -245,8 +255,21 @@ int read_from_shm(long shm_size) {
       }
     }
 
-    printf("%c", shm_buffer[position++]);
+    output = shm_buffer[position];
 
+    printf("\nshm_buffer[%d] = %d\n", position, output);
+
+    if (output != EOF) {
+      if (printf("%c", output) < 0) {
+        cleanup();
+        /* errno is set by printf */
+        return -1;
+      }
+    }
+
+    position++;
+
+    /* wrap around the ring buffer */
     if (position == shm_size) {
       position = 0;
     }
@@ -257,7 +280,7 @@ int read_from_shm(long shm_size) {
       /* errno is set by sem_post */
       return -1;
     }
-  } while (shm_buffer[position] != EOF);
+  } while (output != EOF);
 
   cleanup();
 

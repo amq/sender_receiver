@@ -10,3 +10,4 @@ Useful links:
 - http://mij.oltrelinux.com/devel/unixprg/
 - http://man7.org/linux/man-pages/man7/shm_overview.7.html
 - http://stackoverflow.com/questions/21311080/linux-shared-memory-shmget-vs-mmap
+- https://gist.github.com/aspyct/3462238
