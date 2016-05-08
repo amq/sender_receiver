@@ -1,18 +1,18 @@
 #include "shared.h"
 
 /* write semaphore: free space */
-char sem_w_name[NAME_LENGTH] = "";
-sem_t *sem_w_id = SEM_FAILED;
+static char sem_w_name[NAME_LENGTH] = "";
+static sem_t *sem_w_id = SEM_FAILED;
 
 /* read semaphore: number of characters left to be read */
-char sem_r_name[NAME_LENGTH] = "";
-sem_t *sem_r_id = SEM_FAILED;
+static char sem_r_name[NAME_LENGTH] = "";
+static sem_t *sem_r_id = SEM_FAILED;
 
-char shm_name[NAME_LENGTH] = "";
-int shm_fd = -1;
-int *shm_buffer = MAP_FAILED;
-
-long size = -1;
+/* shared memory */
+static long global_shm_size = -1;
+static char shm_name[NAME_LENGTH] = "";
+static int shm_fd = -1;
+static int *shm_buffer = MAP_FAILED;
 
 /**
  * @brief
@@ -61,17 +61,14 @@ long parse_shm_size(int argc, char *argv[]) {
 /**
  * @brief
  *
- * it is safe to call this function multiple times,
- * sem_open and shm_open only create elements if they don't exist
- *
  * @param
  *
  * @returns
  */
 int init(long shm_size) {
-  size = shm_size;
+  global_shm_size = shm_size;
 
-  /* @todo: portability */
+  /* register the signal handler */
   signal(SIGINT, signal_callback);
   signal(SIGTERM, signal_callback);
   signal(SIGHUP, signal_callback);
@@ -99,7 +96,6 @@ int init(long shm_size) {
     return -1;
   }
 
-  /* @todo: make sure we understand the options */
   /* open a shared memory object */
   shm_fd = shm_open(shm_name, O_RDWR | O_CREAT,
                     S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
@@ -135,7 +131,7 @@ int init(long shm_size) {
  * @returns
  */
 int cleanup(void) {
-  int errno_save = errno;
+  int errno_original = errno;
 
   if (sem_w_id != SEM_FAILED) {
     sem_close(sem_w_id);
@@ -148,7 +144,7 @@ int cleanup(void) {
   }
 
   if (shm_buffer != MAP_FAILED) {
-    munmap(shm_buffer, (size_t)size);
+    munmap(shm_buffer, (size_t)global_shm_size);
   }
 
   if (shm_fd != -1) {
@@ -157,19 +153,22 @@ int cleanup(void) {
   }
 
   /* make sure this function does not modify errno */
-  errno = errno_save;
-
-  fprintf(stderr, "cleanup\n");
+  errno = errno_original;
 
   return 0;
 }
 
+/**
+ * @brief
+ *
+ * @param
+ *
+ * @returns
+ */
 void signal_callback(int signum) {
   cleanup();
 
-  fprintf(stderr, "caught signal\n");
-
-  exit(signum);
+  _exit(signum);
 }
 
 /**
@@ -204,8 +203,6 @@ int write_to_shm(long shm_size, FILE *stream) {
 
     input = fgetc(stream);
     shm_buffer[position] = input;
-
-    printf("shm_buffer[%d] = %d\n", position, shm_buffer[position]);
 
     position++;
 
@@ -256,8 +253,6 @@ int read_from_shm(long shm_size) {
     }
 
     output = shm_buffer[position];
-
-    printf("\nshm_buffer[%d] = %d\n", position, output);
 
     if (output != EOF) {
       if (printf("%c", output) < 0) {
