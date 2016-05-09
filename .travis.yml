@@ -29,6 +29,9 @@ script:
   - cd build
   - cmake -DCMAKE_BUILD_TYPE=Debug ..
   - cmake --build .
+  # tests
+  - cd ../tests/external
+  - bash test_sender_empfaenger.sh
 after_success:
   # coverity
   - cd $TRAVIS_BUILD_DIR

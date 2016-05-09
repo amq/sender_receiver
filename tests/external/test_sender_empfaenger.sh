@@ -24,8 +24,8 @@ readonly PROGNAME="$0"
 
 MYTMPDIR=/tmp
 
-SENDER=./sender
-EMPFAENGER=./empfaenger
+SENDER=../../build/sender
+EMPFAENGER=../../build/receiver
 DELAYTIME=15
 IGNORE_FAILED_TESTS=0
 
@@ -94,13 +94,13 @@ function test_passed() {
 }
 
 function record_resources_after() {
-    SHM_KEYS_AFTER=`ipcs -m | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
-    SEM_KEYS_AFTER=`ipcs -s | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
+    SHM_KEYS_AFTER=`find /dev/shm -user $(whoami) -name "$(id -u)*" -type f`
+    SEM_KEYS_AFTER=`find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f`
 }
 
 function record_resources_before() {
-    SHM_KEYS_BEFORE=`ipcs -m | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
-    SEM_KEYS_BEFORE=`ipcs -s | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
+    SHM_KEYS_BEFORE=`find /dev/shm -user $(whoami) -name "$(id -u)*" -type f`
+    SEM_KEYS_BEFORE=`find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f`
 }
 
 function check_resources() {

@@ -1,15 +1,14 @@
 #include "shared.h"
 
 int main(int argc, char *argv[]) {
-  long shm_size = parse_shm_size(argc, argv);
+  long shm_size = shared_parse_size(argc, argv);
 
   if (shm_size == -1) {
-    perror(argv[0]);
+    fprintf(stderr, "Usage: ./sender -m <buffer_size> < data.txt");
     return EXIT_FAILURE;
   }
 
-  if (write_to_shm(shm_size, stdin) == -1) {
-    perror(argv[0]);
+  if (shared_send(shm_size, stdin) == -1) {
     return EXIT_FAILURE;
   }
 

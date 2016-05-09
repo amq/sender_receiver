@@ -1,34 +1,34 @@
 #include "shared.h"
 
 /* write semaphore: free space */
-static char sem_w_name[NAME_LENGTH] = "";
+static char sem_w_name[IPC_NAME_LEN] = "";
 static sem_t *sem_w_id = SEM_FAILED;
 
 /* read semaphore: number of characters left to be read */
-static char sem_r_name[NAME_LENGTH] = "";
+static char sem_r_name[IPC_NAME_LEN] = "";
 static sem_t *sem_r_id = SEM_FAILED;
 
 /* shared memory */
 static long global_shm_size = -1;
-static char shm_name[NAME_LENGTH] = "";
+static char shm_name[IPC_NAME_LEN] = "";
 static int shm_fd = -1;
 static int *shm_buffer = MAP_FAILED;
 
 /**
- * @brief
+ * @brief parses the shared memory size from argv
  *
- * @param
+ * @param argc the number of arguments
+ * @param argv the arguments
  *
- * @returns
+ * @returns the shared memory size or -1 in case of error
  */
-long parse_shm_size(int argc, char *argv[]) {
-  int opt = -1;
+long shared_parse_size(int argc, char *argv[]) {
+  int opt;
   long shm_size = -1;
   char *notconv = "";
 
-  /* there are no arguments */
   if (argc < 2) {
-    errno = EINVAL;
+    warnx("Not enough arguments");
     return -1;
   }
 
@@ -39,19 +39,18 @@ long parse_shm_size(int argc, char *argv[]) {
       shm_size = strtol(optarg, &notconv, 10);
       /* over-/underflow or some characters could not be converted */
       if (errno != 0 || *notconv != '\0') {
-        errno = EINVAL;
+        warnx("Invalid argument to: %c", opt);
         return -1;
       }
       break;
     default:
-      errno = EINVAL;
+      /* error is printed by getopt() */
       return -1;
     }
   }
 
-  /* there are some non-option arguments */
   if (optind < argc) {
-    errno = EINVAL;
+    warnx("Non-option arguments");
     return -1;
   }
 
@@ -59,64 +58,71 @@ long parse_shm_size(int argc, char *argv[]) {
 }
 
 /**
- * @brief
+ * @brief creates or opens semaphores and the shared memory
  *
- * @param
+ * @param shm_size the desired size of the shared memory
  *
- * @returns
+ * @returns 0 if everything went well and -1 in case of error
  */
-int init(long shm_size) {
+int shared_init(long shm_size) {
   global_shm_size = shm_size;
 
   /* register the signal handler */
-  signal(SIGINT, signal_callback);
-  signal(SIGTERM, signal_callback);
-  signal(SIGHUP, signal_callback);
+  if (signal(SIGINT, shared_signal) == SIG_ERR) {
+    warn("signal()");
+    return -1;
+  }
+  if (signal(SIGTERM, shared_signal) == SIG_ERR) {
+    warn("signal()");
+    return -1;
+  }
+  if (signal(SIGHUP, shared_signal) == SIG_ERR) {
+    warn("signal()");
+    return -1;
+  }
 
   /* convert the sem/shm number (as defined in spec) to a string */
   if (sprintf(sem_w_name, "%llu", SEM_W_NAME) < 0) {
-    /* errno is set by sprintf */
+    warn("sprintf()");
     return -1;
   }
   if (sprintf(sem_r_name, "%llu", SEM_R_NAME) < 0) {
+    warn("sprintf()");
     return -1;
   }
   if (sprintf(shm_name, "%llu", SHM_NAME) < 0) {
+    warn("sprintf()");
     return -1;
   }
 
   /* initially the free space is equal to shm_size */
-  sem_w_id = sem_open(sem_w_name, O_CREAT, S_IRUSR | S_IWUSR, shm_size);
+  if ((sem_w_id = sem_open(sem_w_name, O_CREAT, 0600, shm_size)) == SEM_FAILED) {
+    warn("sem_open()");
+    return -1;
+  }
 
   /* initially there are no characters to be read */
-  sem_r_id = sem_open(sem_r_name, O_CREAT, S_IRUSR | S_IWUSR, 0);
-
-  if (sem_w_id == SEM_FAILED || sem_r_id == SEM_FAILED) {
-    /* errno is set by sem_open */
+  if ((sem_r_id = sem_open(sem_r_name, O_CREAT, 0600, 0)) == SEM_FAILED) {
+    warn("sem_open()");
     return -1;
   }
 
   /* open a shared memory object */
-  shm_fd = shm_open(shm_name, O_RDWR | O_CREAT,
-                    S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH);
-
-  if (shm_fd == -1) {
-    /* errno is set by shm_open */
+  if ((shm_fd = shm_open(shm_name, O_RDWR | O_CREAT, 0600)) == -1) {
+    warn("shm_open()");
     return -1;
   }
 
   /* set the size of the shared memory object */
   if (ftruncate(shm_fd, shm_size * sizeof(*shm_buffer)) == -1) {
-    /* errno is set by ftruncate */
+    warn("ftruncate()");
     return -1;
   }
 
   /* map the memory object so that it can be used, imagine it as malloc */
-  shm_buffer = mmap(NULL, (size_t)shm_size * sizeof(*shm_buffer), PROT_READ | PROT_WRITE,
-                    MAP_SHARED, shm_fd, 0);
-
-  if (shm_buffer == MAP_FAILED) {
-    /* errno is set by mmap */
+  if ((shm_buffer = mmap(NULL, (size_t)shm_size * sizeof(*shm_buffer), PROT_READ | PROT_WRITE,
+                         MAP_SHARED, shm_fd, 0)) == MAP_FAILED) {
+    warn("mmap()");
     return -1;
   }
 
@@ -124,66 +130,68 @@ int init(long shm_size) {
 }
 
 /**
- * @brief
- *
- * @param
- *
- * @returns
+ * @brief closes and removes semaphores and the shared memory, best-effort
  */
-int cleanup(void) {
-  int errno_original = errno;
-
+void shared_cleanup(void) {
   if (sem_w_id != SEM_FAILED) {
-    sem_close(sem_w_id);
-    sem_unlink(sem_w_name);
+    if (sem_close(sem_w_id) == -1) {
+      warn("sem_close()");
+    }
+    if (sem_unlink(sem_w_name) == -1) {
+      warn("sem_unlink()");
+    }
   }
 
   if (sem_r_id != SEM_FAILED) {
-    sem_close(sem_r_id);
-    sem_unlink(sem_r_name);
+    if (sem_close(sem_r_id) == -1) {
+      warn("sem_close()");
+    }
+    if (sem_unlink(sem_r_name) == -1) {
+      warn("sem_unlink()");
+    }
   }
 
   if (shm_buffer != MAP_FAILED) {
-    munmap(shm_buffer, (size_t)global_shm_size);
+    if (munmap(shm_buffer, (size_t)global_shm_size) == -1) {
+      warn("munmap()");
+    }
   }
 
   if (shm_fd != -1) {
-    close(shm_fd);
-    shm_unlink(shm_name);
+    if (close(shm_fd) == -1) {
+      warn("close()");
+    }
+    if (shm_unlink(shm_name) == -1) {
+      warn("shm_unlink()");
+    }
   }
-
-  /* make sure this function does not modify errno */
-  errno = errno_original;
-
-  return 0;
 }
 
 /**
- * @brief
+ * @brief handles signals by performing a cleanup before exit
  *
- * @param
- *
- * @returns
+ * @param signum the signal number
  */
-void signal_callback(int signum) {
-  cleanup();
+void shared_signal(int signum) {
+  shared_cleanup();
   _exit(signum);
 }
 
 /**
- * @brief
+ * @brief writes data from the stream to a ring buffer-based shared memory
  *
- * @param
+ * @param shm_size the size of the shared memory
+ * @param stream the stream to be processed
  *
- * @returns
+ * @returns 0 if everything went well and -1 in case of error
  */
-int write_to_shm(long shm_size, FILE *stream) {
-  int input = EOF;
+int shared_send(long shm_size, FILE *stream) {
+  int input;
   int position = 0;
 
-  if (init(shm_size) == -1) {
-    cleanup();
-    /* errno is set by init */
+  if (shared_init(shm_size) == -1) {
+    shared_cleanup();
+    /* error is printed by shared_init() */
     return -1;
   }
 
@@ -194,15 +202,21 @@ int write_to_shm(long shm_size, FILE *stream) {
       if (errno == EINTR) {
         continue;
       } else {
-        cleanup();
-        /* errno is set by sem_wait */
+        warn("sem_wait()");
+        shared_cleanup();
         return -1;
       }
     }
 
     input = fgetc(stream);
-    shm_buffer[position] = input;
 
+    if (input == EOF && ferror(stream) != 0) {
+      warn("fgetc()");
+      shared_cleanup();
+      return -1;
+    }
+
+    shm_buffer[position] = input;
     position++;
 
     /* wrap around the ring buffer */
@@ -212,8 +226,8 @@ int write_to_shm(long shm_size, FILE *stream) {
 
     /* increment the number of characters */
     if (sem_post(sem_r_id) == -1) {
-      cleanup();
-      /* errno is set by sem_post */
+      warn("sem_post()");
+      shared_cleanup();
       return -1;
     }
   } while (input != EOF);
@@ -222,19 +236,19 @@ int write_to_shm(long shm_size, FILE *stream) {
 }
 
 /**
- * @brief
+ * @brief prints data from the ring buffer-based shared memory
  *
- * @param
+ * @param shm_size the size of the shared memory
  *
- * @returns
+ * @returns 0 if everything went well and -1 in case of error
  */
-int read_from_shm(long shm_size) {
-  int output = EOF;
+int shared_receive(long shm_size) {
+  int output;
   int position = 0;
 
-  if (init(shm_size) == -1) {
-    cleanup();
-    /* errno is set by init */
+  if (shared_init(shm_size) == -1) {
+    shared_cleanup();
+    /* error is printed by shared_init() */
     return -1;
   }
 
@@ -245,8 +259,8 @@ int read_from_shm(long shm_size) {
       if (errno == EINTR) {
         continue;
       } else {
-        cleanup();
-        /* errno is set by sem_wait */
+        warn("sem_wait()");
+        shared_cleanup();
         return -1;
       }
     }
@@ -255,8 +269,8 @@ int read_from_shm(long shm_size) {
 
     if (output != EOF) {
       if (printf("%c", output) < 0) {
-        cleanup();
-        /* errno is set by printf */
+        warn("printf()");
+        shared_cleanup();
         return -1;
       }
     }
@@ -270,13 +284,13 @@ int read_from_shm(long shm_size) {
 
     /* increment the free space */
     if (sem_post(sem_w_id) == -1) {
-      cleanup();
-      /* errno is set by sem_post */
+      warn("sem_post()");
+      shared_cleanup();
       return -1;
     }
   } while (output != EOF);
 
-  cleanup();
+  shared_cleanup();
 
   return 0;
 }
