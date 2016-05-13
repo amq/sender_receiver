@@ -1,12 +1,12 @@
 #include "shared.h"
 
-/* a global pointer to a struct, used for signal handling only */
-shared_t *data_ptr;
+/* a global pointer, used for signal handling only */
+static shared_t *data_ptr;
 
 /* internal function prototypes */
 static int shared_init(long shm_size, shared_t *data);
 static void shared_cleanup(shared_t *data);
-void shared_signal(int signum);
+static void shared_signal(int signum);
 
 /**
  * @brief parses the shared memory size from argv
@@ -173,7 +173,7 @@ static void shared_cleanup(shared_t *data) {
  *
  * @param signum the signal number
  */
-void shared_signal(int signum) {
+static void shared_signal(int signum) {
   shared_cleanup(data_ptr);
   _exit(signum);
 }

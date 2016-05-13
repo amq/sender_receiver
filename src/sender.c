@@ -4,7 +4,7 @@ int main(int argc, char *argv[]) {
   long shm_size = shared_parse_size(argc, argv);
 
   if (shm_size == -1) {
-    fprintf(stderr, "Usage: ./sender -m <buffer_size> < data.txt");
+    fprintf(stderr, "Usage: ./sender -m <buffer_size> < data.txt\n");
     return EXIT_FAILURE;
   }
 
