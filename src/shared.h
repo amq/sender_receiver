@@ -1,5 +1,4 @@
-#ifndef _SENDER_RECEIVER_H_
-#define _SENDER_RECEIVER_H_
+#pragma once
 
 #include <stdio.h>
 #include <semaphore.h>
@@ -12,15 +11,20 @@
 #include <err.h>
 
 #define IPC_NAME_LEN 24
-#define SEM_W_NAME (1000ull * getuid() + 0)
-#define SEM_R_NAME (1000ull * getuid() + 1)
-#define SHM_NAME (1000ull * getuid() + 2)
+#define IPC_NAME(offset) (1000ull * getuid() + offset)
+#define IPC_PERMS 0600
+
+typedef struct {
+    char shm_name[IPC_NAME_LEN];
+    char sem_w_name[IPC_NAME_LEN];
+    char sem_r_name[IPC_NAME_LEN];
+    long shm_size;
+    int shm_fd;
+    int *shm_buffer;
+    sem_t *sem_w_id;
+    sem_t *sem_r_id;
+} shared_t;
 
 long shared_parse_size(int argc, char *argv[]);
-int shared_init(long shm_size);
-void shared_cleanup(void);
-void shared_signal(int signum);
 int shared_send(long shm_size, FILE *stream);
 int shared_receive(long shm_size);
-
-#endif /* _SENDER_RECEIVER_H_ */
