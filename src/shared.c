@@ -1,7 +1,7 @@
 #include "shared.h"
 
 /* a global pointer, used for signal handling only */
-static shared_t *data_ptr;
+static shared_t *data_ptr = NULL;
 
 /* internal function prototypes */
 static int shared_init(long shm_size, shared_t *data);
@@ -31,7 +31,7 @@ long shared_parse_size(int argc, char *argv[]) {
     case 'm':
       errno = 0;
       shm_size = strtol(optarg, &notconv, 10);
-      /* over-/underflow or some characters could not be converted */
+      /* over-/underflow or some characters could not be converted or too small */
       if (errno != 0 || *notconv != '\0' || shm_size < 1) {
         warnx("Invalid argument to: %c", opt);
         return -1;
@@ -52,9 +52,10 @@ long shared_parse_size(int argc, char *argv[]) {
 }
 
 /**
- * @brief creates or opens semaphores and the shared memory
+ * @brief creates or opens the semaphores and shared memory
  *
  * @param shm_size the desired size of the shared memory
+ * @param data the struct to contain the ipc names and ids
  *
  * @returns 0 if everything went well and -1 in case of error
  */
@@ -64,6 +65,9 @@ static int shared_init(long shm_size, shared_t *data) {
   data->shm_buffer = MAP_FAILED;
   data->sem_w_id = SEM_FAILED;
   data->sem_r_id = SEM_FAILED;
+
+  /* save the pointer into a global variable for signal handling */
+  data_ptr = data;
 
   /* register the signal handler */
   if (signal(SIGINT, shared_signal) == SIG_ERR) {
@@ -124,14 +128,13 @@ static int shared_init(long shm_size, shared_t *data) {
     return -1;
   }
 
-  /* save the pointer into a global variable for signal handling */
-  data_ptr = data;
-
   return 0;
 }
 
 /**
- * @brief closes and removes semaphores and the shared memory, best-effort
+ * @brief closes and removes semaphores and the shared memory
+ *
+ * @param data the struct which contains the ipc names and ids
  */
 static void shared_cleanup(shared_t *data) {
   if (data->sem_w_id != SEM_FAILED) {
