@@ -1,11 +1,37 @@
 #include "shared.h"
 
+#include <semaphore.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#include <err.h>
+#include <stdnoreturn.h>
+
+#define IPC_NAME_LEN 24
+#define IPC_NAME(offset) (1000ull * getuid() + offset)
+#define IPC_PERMS 0600
+
+typedef struct {
+  char shm_name[IPC_NAME_LEN];
+  char sem_w_name[IPC_NAME_LEN];
+  char sem_r_name[IPC_NAME_LEN];
+  sem_t *sem_w_id;
+  sem_t *sem_r_id;
+  long shm_size;
+  int shm_fd;
+  int *shm_buffer;
+} shared_t;
+
 /* a global pointer, used for signal handling only */
 static shared_t *data_ptr = NULL;
 
 /* internal function prototypes */
 static int shared_init(long shm_size, shared_t *data);
 static void shared_cleanup(shared_t *data);
+static void shared_close(shared_t *data);
+static void shared_remove(shared_t *data);
 static void shared_signal(int signum);
 
 /**
@@ -52,136 +78,6 @@ long shared_parse_size(int argc, char *argv[]) {
 }
 
 /**
- * @brief creates or opens the semaphores and shared memory
- *
- * @param shm_size the desired size of the shared memory
- * @param data the struct to contain the ipc names and ids
- *
- * @returns 0 if everything went well and -1 in case of error
- */
-static int shared_init(long shm_size, shared_t *data) {
-  data->shm_size = shm_size;
-  data->shm_fd = -1;
-  data->shm_buffer = MAP_FAILED;
-  data->sem_w_id = SEM_FAILED;
-  data->sem_r_id = SEM_FAILED;
-
-  /* save the pointer into a global variable for signal handling */
-  data_ptr = data;
-
-  /* register the signal handler */
-  if (signal(SIGINT, shared_signal) == SIG_ERR) {
-    warn("signal()");
-    return -1;
-  }
-  if (signal(SIGTERM, shared_signal) == SIG_ERR) {
-    warn("signal()");
-    return -1;
-  }
-  if (signal(SIGHUP, shared_signal) == SIG_ERR) {
-    warn("signal()");
-    return -1;
-  }
-
-  /* convert the sem/shm number (as defined in spec) to a string */
-  if (sprintf(data->shm_name, "%c%llu", '/', IPC_NAME(0)) < 0) {
-    warn("sprintf()");
-    return -1;
-  }
-  if (sprintf(data->sem_w_name, "%c%llu", '/', IPC_NAME(1)) < 0) {
-    warn("sprintf()");
-    return -1;
-  }
-  if (sprintf(data->sem_r_name, "%c%llu", '/', IPC_NAME(2)) < 0) {
-    warn("sprintf()");
-    return -1;
-  }
-
-  /* open a shared memory object */
-  if ((data->shm_fd = shm_open(data->shm_name, O_RDWR | O_CREAT, IPC_PERMS)) == -1) {
-    warn("shm_open()");
-    return -1;
-  }
-
-  /* set the size of the shared memory object */
-  if (ftruncate(data->shm_fd, shm_size * sizeof(*data->shm_buffer)) == -1) {
-    warn("ftruncate()");
-    return -1;
-  }
-
-  /* map the memory object so that it can be used, imagine it as malloc */
-  if ((data->shm_buffer = mmap(NULL, shm_size * sizeof(*data->shm_buffer), PROT_READ | PROT_WRITE,
-                               MAP_SHARED, data->shm_fd, 0)) == MAP_FAILED) {
-    warn("mmap()");
-    return -1;
-  }
-
-  /* initially the free space is equal to shm_size */
-  if ((data->sem_w_id = sem_open(data->sem_w_name, O_CREAT, IPC_PERMS, shm_size)) == SEM_FAILED) {
-    warn("sem_open()");
-    return -1;
-  }
-
-  /* initially there are no characters to be read */
-  if ((data->sem_r_id = sem_open(data->sem_r_name, O_CREAT, IPC_PERMS, 0)) == SEM_FAILED) {
-    warn("sem_open()");
-    return -1;
-  }
-
-  return 0;
-}
-
-/**
- * @brief closes and removes semaphores and the shared memory
- *
- * @param data the struct which contains the ipc names and ids
- */
-static void shared_cleanup(shared_t *data) {
-  if (data->sem_w_id != SEM_FAILED) {
-    if (sem_close(data->sem_w_id) == -1) {
-      warn("sem_close()");
-    }
-    if (sem_unlink(data->sem_w_name) == -1) {
-      warn("sem_unlink()");
-    }
-  }
-
-  if (data->sem_r_id != SEM_FAILED) {
-    if (sem_close(data->sem_r_id) == -1) {
-      warn("sem_close()");
-    }
-    if (sem_unlink(data->sem_r_name) == -1) {
-      warn("sem_unlink()");
-    }
-  }
-
-  if (data->shm_buffer != MAP_FAILED) {
-    if (munmap(data->shm_buffer, (size_t)data->shm_size) == -1) {
-      warn("munmap()");
-    }
-  }
-
-  if (data->shm_fd != -1) {
-    if (close(data->shm_fd) == -1) {
-      warn("close()");
-    }
-    if (shm_unlink(data->shm_name) == -1) {
-      warn("shm_unlink()");
-    }
-  }
-}
-
-/**
- * @brief handles signals by performing a cleanup before exit
- *
- * @param signum the signal number
- */
-static void shared_signal(int signum) {
-  shared_cleanup(data_ptr);
-  _exit(signum);
-}
-
-/**
  * @brief writes data from the stream to a ring buffer-based shared memory
  *
  * @param shm_size the size of the shared memory
@@ -191,18 +87,18 @@ static void shared_signal(int signum) {
  */
 int shared_send(long shm_size, FILE *stream) {
   shared_t data;
-  int input;
+  int input = EOF;
   int position = 0;
 
   if (shared_init(shm_size, &data) == -1) {
-    shared_cleanup(&data);
     /* error is printed by shared_init() */
+    shared_cleanup(&data);
     return -1;
   }
 
   do {
     /* decrement the free space and wait if 0 */
-    while (sem_wait(data.sem_w_id) == -1) {
+    if (sem_wait(data.sem_w_id) == -1) {
       /* try again after a signal interrupt */
       if (errno == EINTR) {
         continue;
@@ -211,6 +107,12 @@ int shared_send(long shm_size, FILE *stream) {
         shared_cleanup(&data);
         return -1;
       }
+    }
+
+    if (data.shm_buffer[data.shm_size] == EOF) {
+      warnx("Receiver exited unexpectedly");
+      shared_close(&data);
+      return -1;
     }
 
     input = fgetc(stream);
@@ -237,6 +139,8 @@ int shared_send(long shm_size, FILE *stream) {
     }
   } while (input != EOF);
 
+  shared_close(&data);
+
   return 0;
 }
 
@@ -249,18 +153,18 @@ int shared_send(long shm_size, FILE *stream) {
  */
 int shared_receive(long shm_size) {
   shared_t data;
-  int output;
+  int output = EOF;
   int position = 0;
 
   if (shared_init(shm_size, &data) == -1) {
-    shared_cleanup(&data);
     /* error is printed by shared_init() */
+    shared_cleanup(&data);
     return -1;
   }
 
   do {
     /* decrement the number of characters and wait if 0 */
-    while (sem_wait(data.sem_r_id) == -1) {
+    if (sem_wait(data.sem_r_id) == -1) {
       /* try again after a signal interrupt */
       if (errno == EINTR) {
         continue;
@@ -271,7 +175,14 @@ int shared_receive(long shm_size) {
       }
     }
 
+    if (data.shm_buffer[data.shm_size] == EOF) {
+      warnx("Sender exited unexpectedly");
+      shared_close(&data);
+      return -1;
+    }
+
     output = data.shm_buffer[position];
+    position++;
 
     if (output != EOF) {
       if (printf("%c", output) < 0) {
@@ -280,8 +191,6 @@ int shared_receive(long shm_size) {
         return -1;
       }
     }
-
-    position++;
 
     /* wrap around the ring buffer */
     if (position == shm_size) {
@@ -299,4 +208,173 @@ int shared_receive(long shm_size) {
   shared_cleanup(&data);
 
   return 0;
+}
+
+/**
+ * @brief creates or opens the semaphores and shared memory
+ *
+ * @param shm_size the desired size of the shared memory
+ * @param data the struct to contain the ipc names and ids
+ *
+ * @returns 0 if everything went well and -1 in case of error
+ */
+static int shared_init(long shm_size, shared_t *data) {
+  struct sigaction sa;
+  data->shm_size = shm_size;
+  data->shm_fd = -1;
+  data->shm_buffer = MAP_FAILED;
+  data->sem_w_id = SEM_FAILED;
+  data->sem_r_id = SEM_FAILED;
+
+  /* save the pointer into a global variable for signal handling */
+  data_ptr = data;
+
+  /* register the signal handler function */
+  sa.sa_handler = &shared_signal;
+
+  /* block signals during the handling */
+  sigfillset(&sa.sa_mask);
+
+  /* intercept termination signals */
+  if (sigaction(SIGINT, &sa, NULL) == -1) {
+    warn("sigaction()");
+    return -1;
+  }
+  if (sigaction(SIGTERM, &sa, NULL) == -1) {
+    warn("sigaction()");
+    return -1;
+  }
+  if (sigaction(SIGHUP, &sa, NULL) == -1) {
+    warn("sigaction()");
+    return -1;
+  }
+
+  /* convert the sem/shm number (as defined in spec) to a string */
+  if (sprintf(data->shm_name, "%c%llu", '/', IPC_NAME(0)) < 0) {
+    warn("sprintf()");
+    return -1;
+  }
+  if (sprintf(data->sem_w_name, "%c%llu", '/', IPC_NAME(1)) < 0) {
+    warn("sprintf()");
+    return -1;
+  }
+  if (sprintf(data->sem_r_name, "%c%llu", '/', IPC_NAME(2)) < 0) {
+    warn("sprintf()");
+    return -1;
+  }
+
+  /* open a shared memory object */
+  if ((data->shm_fd = shm_open(data->shm_name, O_RDWR | O_CREAT, IPC_PERMS)) == -1) {
+    warn("shm_open()");
+    return -1;
+  }
+
+  /* set the size of the shared memory object and initialize it with 0 */
+  if (ftruncate(data->shm_fd, shm_size * sizeof(*data->shm_buffer) + 1) == -1) {
+    warn("ftruncate()");
+    return -1;
+  }
+
+  /* map the memory object so that it can be used, similar to malloc */
+  if ((data->shm_buffer = mmap(NULL, shm_size * sizeof(*data->shm_buffer) + 1,
+                               PROT_READ | PROT_WRITE, //
+                               MAP_SHARED, data->shm_fd, 0)) == MAP_FAILED) {
+    warn("mmap()");
+    return -1;
+  }
+
+  /* write semaphore: initially the free space is equal to shm_size */
+  if ((data->sem_w_id = sem_open(data->sem_w_name, O_CREAT, IPC_PERMS, shm_size)) == SEM_FAILED) {
+    warn("sem_open()");
+    return -1;
+  }
+
+  /* read semaphore: initially there are no characters to be read */
+  if ((data->sem_r_id = sem_open(data->sem_r_name, O_CREAT, IPC_PERMS, 0)) == SEM_FAILED) {
+    warn("sem_open()");
+    return -1;
+  }
+
+  return 0;
+}
+
+/**
+ * @brief performs a full cleanup
+ *
+ * @param data the struct which contains the ipc names and ids
+ */
+static void shared_cleanup(shared_t *data) {
+  /* let the other process know over a non-used element in buffer */
+  data->shm_buffer[data->shm_size] = EOF;
+
+  /* unlock semaphores so that the other process can terminate */
+  if (data->sem_w_id != SEM_FAILED) {
+    if (sem_post(data->sem_w_id) == -1) {
+      warn("sem_post()");
+    }
+  }
+  if (data->sem_r_id != SEM_FAILED) {
+    if (sem_post(data->sem_r_id) == -1) {
+      warn("sem_post()");
+    }
+  }
+
+  shared_close(data);
+  shared_remove(data);
+}
+
+/**
+ * @brief closes the semaphores and shared memory
+ *
+ * @param data the struct which contains the ipc names and ids
+ */
+static void shared_close(shared_t *data) {
+  if (data->sem_w_id != SEM_FAILED) {
+    if (sem_close(data->sem_w_id) == -1) {
+      warn("sem_close()");
+    }
+  }
+  if (data->sem_r_id != SEM_FAILED) {
+    if (sem_close(data->sem_r_id) == -1) {
+      warn("sem_close()");
+    }
+  }
+  if (data->shm_buffer != MAP_FAILED) {
+    if (munmap(data->shm_buffer, (size_t)data->shm_size) == -1) {
+      warn("munmap()");
+    }
+  }
+}
+
+/**
+ * @brief removes the semaphores and shared memory
+ *
+ * @param data the struct which contains the ipc names and ids
+ */
+static void shared_remove(shared_t *data) {
+  if (data->sem_w_id != SEM_FAILED) {
+    if (sem_unlink(data->sem_w_name) == -1) {
+      warn("sem_unlink()");
+    }
+  }
+  if (data->sem_r_id != SEM_FAILED) {
+    if (sem_unlink(data->sem_r_name) == -1) {
+      warn("sem_unlink()");
+    }
+  }
+  if (data->shm_fd != -1) {
+    if (shm_unlink(data->shm_name) == -1) {
+      warn("shm_unlink()");
+    }
+  }
+}
+
+/**
+ * @brief handles signals by performing a cleanup before exit
+ *
+ * @param signum the signal number
+ */
+static noreturn void shared_signal(int signum) {
+  shared_cleanup(data_ptr);
+  _exit(signum);
 }
