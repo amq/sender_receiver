@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <signal.h>
 #include <err.h>
-#include <stdnoreturn.h>
 
 #define IPC_NAME_LEN 24
 #define IPC_NAME(offset) (1000ull * getuid() + offset)
@@ -374,7 +373,7 @@ static void shared_remove(shared_t *data) {
  *
  * @param signum the signal number
  */
-static noreturn void shared_signal(int signum) {
+static void shared_signal(int signum) {
   shared_cleanup(data_ptr);
   _exit(signum);
 }
