@@ -102,7 +102,7 @@ int shared_send(long shm_size, FILE *stream) {
       if (errno == EINTR) {
         continue;
       } else {
-        warn("sem_wait()");
+        warn("sem_wait");
         shared_cleanup(&data);
         return -1;
       }
@@ -117,7 +117,7 @@ int shared_send(long shm_size, FILE *stream) {
     input = fgetc(stream);
 
     if (input == EOF && ferror(stream) != 0) {
-      warn("fgetc()");
+      warn("fgetc");
       shared_cleanup(&data);
       return -1;
     }
@@ -132,7 +132,7 @@ int shared_send(long shm_size, FILE *stream) {
 
     /* increment the number of characters */
     if (sem_post(data.sem_r_id) == -1) {
-      warn("sem_post()");
+      warn("sem_post");
       shared_cleanup(&data);
       return -1;
     }
@@ -168,7 +168,7 @@ int shared_receive(long shm_size) {
       if (errno == EINTR) {
         continue;
       } else {
-        warn("sem_wait()");
+        warn("sem_wait");
         shared_cleanup(&data);
         return -1;
       }
@@ -185,7 +185,7 @@ int shared_receive(long shm_size) {
 
     if (output != EOF) {
       if (printf("%c", output) < 0) {
-        warn("printf()");
+        warn("printf");
         shared_cleanup(&data);
         return -1;
       }
@@ -198,7 +198,7 @@ int shared_receive(long shm_size) {
 
     /* increment the free space */
     if (sem_post(data.sem_w_id) == -1) {
-      warn("sem_post()");
+      warn("sem_post");
       shared_cleanup(&data);
       return -1;
     }
@@ -218,7 +218,6 @@ int shared_receive(long shm_size) {
  * @returns 0 if everything went well and -1 in case of error
  */
 static int shared_init(long shm_size, shared_t *data) {
-  struct sigaction sa;
   data->shm_size = shm_size;
   data->shm_fd = -1;
   data->shm_buffer = MAP_FAILED;
@@ -228,7 +227,8 @@ static int shared_init(long shm_size, shared_t *data) {
   /* save the pointer into a global variable for signal handling */
   data_ptr = data;
 
-  /* register the signal handler function */
+  /* register the signal handler */
+  struct sigaction sa;
   sa.sa_handler = &shared_signal;
 
   /* block signals during the handling */
@@ -236,41 +236,41 @@ static int shared_init(long shm_size, shared_t *data) {
 
   /* intercept termination signals */
   if (sigaction(SIGINT, &sa, NULL) == -1) {
-    warn("sigaction()");
+    warn("sigaction");
     return -1;
   }
   if (sigaction(SIGTERM, &sa, NULL) == -1) {
-    warn("sigaction()");
+    warn("sigaction");
     return -1;
   }
   if (sigaction(SIGHUP, &sa, NULL) == -1) {
-    warn("sigaction()");
+    warn("sigaction");
     return -1;
   }
 
   /* convert the sem/shm number (as defined in spec) to a string */
   if (sprintf(data->shm_name, "%c%llu", '/', IPC_NAME(0)) < 0) {
-    warn("sprintf()");
+    warn("sprintf");
     return -1;
   }
   if (sprintf(data->sem_w_name, "%c%llu", '/', IPC_NAME(1)) < 0) {
-    warn("sprintf()");
+    warn("sprintf");
     return -1;
   }
   if (sprintf(data->sem_r_name, "%c%llu", '/', IPC_NAME(2)) < 0) {
-    warn("sprintf()");
+    warn("sprintf");
     return -1;
   }
 
   /* open a shared memory object */
   if ((data->shm_fd = shm_open(data->shm_name, O_RDWR | O_CREAT, IPC_PERMS)) == -1) {
-    warn("shm_open()");
+    warn("shm_open");
     return -1;
   }
 
   /* set the size of the shared memory object and initialize it with 0 */
   if (ftruncate(data->shm_fd, shm_size * sizeof(*data->shm_buffer) + 1) == -1) {
-    warn("ftruncate()");
+    warn("ftruncate");
     return -1;
   }
 
@@ -278,19 +278,19 @@ static int shared_init(long shm_size, shared_t *data) {
   if ((data->shm_buffer = mmap(NULL, shm_size * sizeof(*data->shm_buffer) + 1,
                                PROT_READ | PROT_WRITE, //
                                MAP_SHARED, data->shm_fd, 0)) == MAP_FAILED) {
-    warn("mmap()");
+    warn("mmap");
     return -1;
   }
 
   /* write semaphore: initially the free space is equal to shm_size */
   if ((data->sem_w_id = sem_open(data->sem_w_name, O_CREAT, IPC_PERMS, shm_size)) == SEM_FAILED) {
-    warn("sem_open()");
+    warn("sem_open");
     return -1;
   }
 
   /* read semaphore: initially there are no characters to be read */
   if ((data->sem_r_id = sem_open(data->sem_r_name, O_CREAT, IPC_PERMS, 0)) == SEM_FAILED) {
-    warn("sem_open()");
+    warn("sem_open");
     return -1;
   }
 
@@ -303,18 +303,18 @@ static int shared_init(long shm_size, shared_t *data) {
  * @param data the struct which contains the ipc names and ids
  */
 static void shared_cleanup(shared_t *data) {
-  /* let the other process know over a non-used element in buffer */
+  /* notify the other process over an unused element in buffer */
   data->shm_buffer[data->shm_size] = EOF;
 
-  /* unlock semaphores so that the other process can terminate */
+  /* unlock the semaphores so that the other process can terminate */
   if (data->sem_w_id != SEM_FAILED) {
     if (sem_post(data->sem_w_id) == -1) {
-      warn("sem_post()");
+      warn("sem_post");
     }
   }
   if (data->sem_r_id != SEM_FAILED) {
     if (sem_post(data->sem_r_id) == -1) {
-      warn("sem_post()");
+      warn("sem_post");
     }
   }
 
@@ -330,17 +330,17 @@ static void shared_cleanup(shared_t *data) {
 static void shared_close(shared_t *data) {
   if (data->sem_w_id != SEM_FAILED) {
     if (sem_close(data->sem_w_id) == -1) {
-      warn("sem_close()");
+      warn("sem_close");
     }
   }
   if (data->sem_r_id != SEM_FAILED) {
     if (sem_close(data->sem_r_id) == -1) {
-      warn("sem_close()");
+      warn("sem_close");
     }
   }
   if (data->shm_buffer != MAP_FAILED) {
     if (munmap(data->shm_buffer, (size_t)data->shm_size) == -1) {
-      warn("munmap()");
+      warn("munmap");
     }
   }
 }
@@ -353,17 +353,17 @@ static void shared_close(shared_t *data) {
 static void shared_remove(shared_t *data) {
   if (data->sem_w_id != SEM_FAILED) {
     if (sem_unlink(data->sem_w_name) == -1) {
-      warn("sem_unlink()");
+      warn("sem_unlink");
     }
   }
   if (data->sem_r_id != SEM_FAILED) {
     if (sem_unlink(data->sem_r_name) == -1) {
-      warn("sem_unlink()");
+      warn("sem_unlink");
     }
   }
   if (data->shm_fd != -1) {
     if (shm_unlink(data->shm_name) == -1) {
-      warn("shm_unlink()");
+      warn("shm_unlink");
     }
   }
 }
