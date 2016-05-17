@@ -231,6 +231,9 @@ static int shared_init(long shm_size, shared_t *data) {
   struct sigaction sa;
   sa.sa_handler = &shared_signal;
 
+  /* restart system calls instead of falling into EINTR */
+  sa.sa_flags = SA_RESTART;
+
   /* block signals during the handling */
   sigfillset(&sa.sa_mask);
 
