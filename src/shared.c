@@ -307,18 +307,8 @@ static int shared_init(long shm_size, shared_t *data) {
  */
 static void shared_cleanup(shared_t *data) {
   /* notify the other process over an unused element in buffer */
-  data->shm_buffer[data->shm_size] = EOF;
-
-  /* unlock the semaphores so that the other process can terminate */
-  if (data->sem_w_id != SEM_FAILED) {
-    if (sem_post(data->sem_w_id) == -1) {
-      warn("sem_post");
-    }
-  }
-  if (data->sem_r_id != SEM_FAILED) {
-    if (sem_post(data->sem_r_id) == -1) {
-      warn("sem_post");
-    }
+  if (data->shm_buffer != MAP_FAILED) {
+    data->shm_buffer[data->shm_size] = EOF;
   }
 
   shared_close(data);
@@ -332,11 +322,17 @@ static void shared_cleanup(shared_t *data) {
  */
 static void shared_close(shared_t *data) {
   if (data->sem_w_id != SEM_FAILED) {
+    if (sem_post(data->sem_w_id) == -1) {
+      warn("sem_post");
+    }
     if (sem_close(data->sem_w_id) == -1) {
       warn("sem_close");
     }
   }
   if (data->sem_r_id != SEM_FAILED) {
+    if (sem_post(data->sem_r_id) == -1) {
+      warn("sem_post");
+    }
     if (sem_close(data->sem_r_id) == -1) {
       warn("sem_close");
     }
