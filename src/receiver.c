@@ -1,5 +1,13 @@
 #include "shared.h"
 
+/**
+ * @brief prints out contents of the shared memory
+ *
+ * @param argc number of arguments
+ * @param argv the arguments
+ *
+ * @returns EXIT_SUCCESS, EXIT_FAILURE
+ */
 int main(int argc, char *argv[]) {
   long shm_size = shared_parse_size(argc, argv);
 

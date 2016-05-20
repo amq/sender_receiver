@@ -47,7 +47,7 @@ long shared_parse_size(int argc, char *argv[]) {
   char *notconv = "";
 
   if (argc < 2) {
-    warnx("Not enough arguments");
+    warnx("Arguments missing");
     return -1;
   }
 
@@ -69,7 +69,7 @@ long shared_parse_size(int argc, char *argv[]) {
   }
 
   if (optind < argc) {
-    warnx("Non-option arguments");
+    warnx("Non-option arguments present");
     return -1;
   }
 
@@ -77,7 +77,7 @@ long shared_parse_size(int argc, char *argv[]) {
 }
 
 /**
- * @brief writes data from the stream to a ring buffer-based shared memory
+ * @brief writes data from the stream to the ring buffer-based shared memory
  *
  * @param shm_size the size of the shared memory
  * @param stream the stream to be processed
@@ -237,7 +237,7 @@ static int shared_init(long shm_size, shared_t *data) {
   /* block signals during the handling */
   sigfillset(&sa.sa_mask);
 
-  /* intercept termination signals */
+  /* catch termination signals */
   if (sigaction(SIGINT, &sa, NULL) == -1) {
     warn("sigaction");
     return -1;
@@ -247,6 +247,10 @@ static int shared_init(long shm_size, shared_t *data) {
     return -1;
   }
   if (sigaction(SIGHUP, &sa, NULL) == -1) {
+    warn("sigaction");
+    return -1;
+  }
+  if (sigaction(SIGQUIT, &sa, NULL) == -1) {
     warn("sigaction");
     return -1;
   }
@@ -306,9 +310,22 @@ static int shared_init(long shm_size, shared_t *data) {
  * @param data the struct which contains the ipc names and ids
  */
 static void shared_cleanup(shared_t *data) {
+
   /* notify the other process over an unused element in buffer */
   if (data->shm_buffer != MAP_FAILED) {
     data->shm_buffer[data->shm_size] = EOF;
+  }
+
+  /* unlock the semaphores to let the other process terminate */
+  if (data->sem_w_id != SEM_FAILED) {
+    if (sem_post(data->sem_w_id) == -1) {
+      warn("sem_post");
+    }
+  }
+  if (data->sem_r_id != SEM_FAILED) {
+    if (sem_post(data->sem_r_id) == -1) {
+      warn("sem_post");
+    }
   }
 
   shared_close(data);
@@ -322,17 +339,11 @@ static void shared_cleanup(shared_t *data) {
  */
 static void shared_close(shared_t *data) {
   if (data->sem_w_id != SEM_FAILED) {
-    if (sem_post(data->sem_w_id) == -1) {
-      warn("sem_post");
-    }
     if (sem_close(data->sem_w_id) == -1) {
       warn("sem_close");
     }
   }
   if (data->sem_r_id != SEM_FAILED) {
-    if (sem_post(data->sem_r_id) == -1) {
-      warn("sem_post");
-    }
     if (sem_close(data->sem_r_id) == -1) {
       warn("sem_close");
     }
