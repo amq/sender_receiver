@@ -108,6 +108,7 @@ int shared_send(long shm_size, FILE *stream) {
       }
     }
 
+    /* stop if other process triggered shared_cleanup() */
     if (data.shm_buffer[data.shm_size] == EOF) {
       warnx("Receiver exited unexpectedly");
       shared_close(&data);
@@ -125,7 +126,7 @@ int shared_send(long shm_size, FILE *stream) {
     data.shm_buffer[position] = input;
     position++;
 
-    /* wrap around the ring buffer */
+    /* stay within bounds of the ring buffer */
     if (position == shm_size) {
       position = 0;
     }
@@ -150,7 +151,7 @@ int shared_send(long shm_size, FILE *stream) {
  *
  * @returns 0 if everything went well and -1 in case of error
  */
-int shared_receive(long shm_size) {
+int shared_receive(long shm_size, FILE *stream) {
   shared_t data;
   int output = EOF;
   int position = 0;
@@ -174,6 +175,7 @@ int shared_receive(long shm_size) {
       }
     }
 
+    /* stop if other process triggered shared_cleanup() */
     if (data.shm_buffer[data.shm_size] == EOF) {
       warnx("Sender exited unexpectedly");
       shared_close(&data);
@@ -184,14 +186,14 @@ int shared_receive(long shm_size) {
     position++;
 
     if (output != EOF) {
-      if (printf("%c", output) < 0) {
-        warn("printf");
+      if (fputc(output, stream) == EOF) {
+        warn("fputc");
         shared_cleanup(&data);
         return -1;
       }
     }
 
-    /* wrap around the ring buffer */
+    /* stay within bounds of the ring buffer */
     if (position == shm_size) {
       position = 0;
     }
@@ -205,6 +207,12 @@ int shared_receive(long shm_size) {
   } while (output != EOF);
 
   shared_cleanup(&data);
+
+  /* force a write of the buffered stdout */
+  if (fflush(stdout) == EOF) {
+    warn("fflush");
+    return -1;
+  }
 
   return 0;
 }
@@ -229,12 +237,12 @@ static int shared_init(long shm_size, shared_t *data) {
 
   /* register the signal handler */
   struct sigaction sa;
-  sa.sa_handler = &shared_signal;
+  sa.sa_handler = shared_signal;
 
-  /* restart system calls instead of falling into EINTR */
+  /* restart system calls if interrupted by handler */
   sa.sa_flags = SA_RESTART;
 
-  /* block signals during the handling */
+  /* block signals during handling */
   sigfillset(&sa.sa_mask);
 
   /* catch termination signals */
@@ -255,7 +263,7 @@ static int shared_init(long shm_size, shared_t *data) {
     return -1;
   }
 
-  /* convert the sem/shm number (as defined in spec) to a string */
+  /* convert the shm/sem number (as defined in spec) to a string */
   if (sprintf(data->shm_name, "%c%llu", '/', IPC_NAME(0)) < 0) {
     warn("sprintf");
     return -1;
@@ -275,7 +283,7 @@ static int shared_init(long shm_size, shared_t *data) {
     return -1;
   }
 
-  /* set the size of the shared memory object and initialize it with 0 */
+  /* set the size of the shared memory object and fill it with 0 */
   if (ftruncate(data->shm_fd, shm_size * sizeof(*data->shm_buffer) + 1) == -1) {
     warn("ftruncate");
     return -1;
@@ -316,7 +324,7 @@ static void shared_cleanup(shared_t *data) {
     data->shm_buffer[data->shm_size] = EOF;
   }
 
-  /* unlock the semaphores to let the other process terminate */
+  /* unlock semaphores to let the other process terminate */
   if (data->sem_w_id != SEM_FAILED) {
     if (sem_post(data->sem_w_id) == -1) {
       warn("sem_post");
@@ -384,6 +392,7 @@ static void shared_remove(shared_t *data) {
  * @param signum the signal number
  */
 static void shared_signal(int signum) {
+  warnx("Caught signal %d", signum);
   shared_cleanup(data_ptr);
-  _exit(signum);
+  _exit(EXIT_FAILURE);
 }

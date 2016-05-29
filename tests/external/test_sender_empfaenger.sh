@@ -22,12 +22,15 @@ set -e		# terminate if command fails
 
 readonly PROGNAME="$0"
 
-MYTMPDIR=/tmp
+MYTMPDIR="${TMPDIR:-/tmp}"
+STDERRFILENAME=`mktemp ${MYTMPDIR}/stderr.XXXXXXXXXX`
 
 SENDER=../../build/sender
 EMPFAENGER=../../build/receiver
 DELAYTIME=15
 IGNORE_FAILED_TESTS=0
+
+USAGEMSGREGEX="^[[:space:]]*(USAGE|Usage|usage)"
 
 TESTS="0 1 2 3 4 5 6 7 8 9 10 11 12 13"
 
@@ -63,14 +66,14 @@ EMPH_OFF="\033[0m"
 
 function show_usage() {
     local EXITCODE=${1:-1}
-    echo "USAGE: ${PROGNAME} [-s <sender executable>] [-e <empfaenger executable>] [-t <delay time>] [-f] [--color (auto|always|never)] [<num1>] [<num2>] ..." >& 2
+    echo "USAGE: ${PROGNAME} [-s <sender executable>] [-e <empfaenger executable>] [-t <delay time>] [-f] [-c (auto|always|never)] [<num1>] [<num2>] ..." >& 2
     echo "       <num<x>> must be a number from ${TESTS}" >& 2
     echo "       --help,-h: this help" >& 2
     echo "       --sender,-s: the binary of the producer" >& 2
     echo "       --empfaenger,-e: the binary of the consumer" >& 2
-    echo "       --time: delay time for longer running tests" >& 2
-    echo "       --force: do not stop on failed tests (unless shared memory or semaphores are left over)" >& 2
-    echo "       --color: auto-detect, force or cease coloring" >& 2
+    echo "       --time,-t: delay time for longer running tests" >& 2
+    echo "       --force,-f: do not stop on failed tests (unless shared memory or semaphores are left over)" >& 2
+    echo "       --color,-c: auto-detect, force or prevent coloring" >& 2
     exit ${EXITCODE}
 }
 
@@ -94,13 +97,21 @@ function test_passed() {
 }
 
 function record_resources_after() {
-    SHM_KEYS_AFTER=`find /dev/shm -user $(whoami) -name "$(id -u)*" -type f`
-    SEM_KEYS_AFTER=`find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f`
+    SHM_KEYS_AFTER_SYSTEMV=`ipcs -m | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
+    SEM_KEYS_AFTER_SYSTEMV=`ipcs -s | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
+    SHM_KEYS_AFTER_POSIX=`find /dev/shm -user $(whoami) -name "$(id -u)*" -type f`
+    SEM_KEYS_AFTER_POSIX=`find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f`
+    SHM_KEYS_AFTER=${SHM_KEYS_AFTER_SYSTEMV}${SHM_KEYS_AFTER_POSIX}
+    SEM_KEYS_AFTER=${SEM_KEYS_AFTER_SYSTEMV}${SEM_KEYS_AFTER_POSIX}
 }
 
 function record_resources_before() {
-    SHM_KEYS_BEFORE=`find /dev/shm -user $(whoami) -name "$(id -u)*" -type f`
-    SEM_KEYS_BEFORE=`find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f`
+    SHM_KEYS_BEFORE_SYSTEMV=`ipcs -m | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
+    SEM_KEYS_BEFORE_SYSTEMV=`ipcs -s | awk '$3 == MYUID{print $1}' MYUID="${MYUID}" | sort -u`
+    SHM_KEYS_BEFORE_POSIX=`find /dev/shm -user $(whoami) -name "$(id -u)*" -type f`
+    SEM_KEYS_BEFORE_POSIX=`find /dev/shm -user $(whoami) -name "sem.$(id -u)*" -type f`
+    SHM_KEYS_BEFORE=${SHM_KEYS_BEFORE_SYSTEMV}${SHM_KEYS_BEFORE_POSIX}
+    SEM_KEYS_BEFORE=${SEM_KEYS_BEFORE_SYSTEMV}${SEM_KEYS_BEFORE_POSIX}
 }
 
 function check_resources() {
@@ -172,7 +183,7 @@ function check_process_alive() {
     then
 	test_passed "Process $2 with PID $1 is still alive"
     else
-	test_failed "Process $2 with PID $1 terminated" 
+	test_failed "Process $2 with PID $1 terminated"
         RV=1
     fi
     return $RV
@@ -204,20 +215,32 @@ function check_files_equal() {
 function test_0() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 0: Test command line parameters - unknown options ----${EMPH_OFF}"
-    if ${SENDER} -x >& /dev/null < /dev/null
+    if ${SENDER} -x > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${SENDER} with unknown options"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} with unknown options"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} with unknown options"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} with unknown options (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
 
-    if ${EMPFAENGER} -y >& /dev/null < /dev/null
+    if ${EMPFAENGER} -y > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${EMPFAENGER} with unknown options"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} with unknown options"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} with unknown options"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} with unknown options (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
     return $RV
 }
@@ -228,20 +251,32 @@ function test_0() {
 function test_1() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 1: Test command line parameters - no options -----${EMPH_OFF}"
-    if ${SENDER} >& /dev/null < /dev/null
+    if ${SENDER} > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${SENDER} without options"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} without options"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} without options"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} without options (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
 
-    if ${EMPFAENGER} >& /dev/null < /dev/null
+    if ${EMPFAENGER} > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${EMPFAENGER} without options"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} without options"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} without options"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} without options (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
     return $RV
 }
@@ -252,34 +287,58 @@ function test_1() {
 function test_2() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 2: Test command line parameters - additional parameters -----${EMPH_OFF}"
-    if ${SENDER} -m 10 foobar >& /dev/null < /dev/null
+    if ${SENDER} -m 10 foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
-        test_failed "No exit code indicating failure when calling ${SENDER} when providing additional parameters"
+        test_failed "No exit code indicating failure when calling ${SENDER} with additional parameters"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} when providing additional parameters"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} with additional parameters"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} with additional parameters (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
-    if ${SENDER} -m10 foobar >& /dev/null < /dev/null
+    if ${SENDER} -m10 foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
-        test_failed "No exit code indicating failure when calling ${SENDER} when providing additional parameters"
+        test_failed "No exit code indicating failure when calling ${SENDER} with additional parameters"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} when providing additional parameters"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} with additional parameters"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} with additional parameters (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
 
-    if ${EMPFAENGER} -m 10 foobar >& /dev/null < /dev/null
+    if ${EMPFAENGER} -m 10 foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
-        test_failed "No exit code indicating failure when calling ${EMPFAENGER} when providing additional parameters"
+        test_failed "No exit code indicating failure when calling ${EMPFAENGER} with additional parameters"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} when providing additional parameters"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} with additional parameters"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} with additonal parameters (see ${STDERRFILENAME}) for output on stderr)"
+	    RV=1
+	fi
     fi
-    if ${EMPFAENGER} -m10 foobar >& /dev/null < /dev/null
+    if ${EMPFAENGER} -m10 foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
-        test_failed "No exit code indicating failure when calling ${EMPFAENGER} when providing additional parameters"
+        test_failed "No exit code indicating failure when calling ${EMPFAENGER} with additional parameters"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} when providing additional parameters"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} with additional parameters"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} with additional parameters (see ${STDERRFILENAME}) for output on stderr)"
+	    RV=1
+	fi
     fi
     return $RV
 }
@@ -290,34 +349,58 @@ function test_2() {
 function test_3() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 3: Test command line parameters - invalid number ----${EMPH_OFF}"
-    if ${SENDER} -m 10foobar >& /dev/null < /dev/null
+    if ${SENDER} -m 10foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${SENDER} with an invalid number"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} with an invalid number"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} with an invalid number"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} with an invalid number (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
-    if ${SENDER} -m10foobar >& /dev/null < /dev/null
+    if ${SENDER} -m10foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${SENDER} with an invalid number"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} with an invalid number"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} with an invalid number"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} with an invalid number (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
 
-    if ${EMPFAENGER} -m 10foobar >& /dev/null < /dev/null
+    if ${EMPFAENGER} -m 10foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${EMPFAENGER} with an invalid number"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} with an invalid number"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} with an invalid number"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} with an invalid number (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
-    if ${EMPFAENGER} -m10foobar >& /dev/null < /dev/null
+    if ${EMPFAENGER} -m10foobar > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${EMPFAENGER} with an invalid number"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} with an invalid number"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} with an invalid number"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} with an invalid number (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
     return $RV
 }
@@ -328,20 +411,32 @@ function test_3() {
 function test_4() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 4: Test command line parameters - huge number (violating the range of long) ----${EMPH_OFF}"
-    if ${SENDER} -m1234567890123456789012345678901234567890 >& /dev/null < /dev/null
+    if ${SENDER} -m1234567890123456789012345678901234567890 > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${SENDER} with a huge number"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${SENDER} with a huge number"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${SENDER} with a huge number"
+	else
+	    test_failed "No usage message printed to stderr when calling ${SENDER} with a huge number (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
 
-    if ${EMPFAENGER} -m1234567890123456789012345678901234567890 >& /dev/null < /dev/null
+    if ${EMPFAENGER} -m1234567890123456789012345678901234567890 > /dev/null 2> "${STDERRFILENAME}" < /dev/null
     then
         test_failed "No exit code indicating failure when calling ${EMPFAENGER} with a huge number"
         RV=1
     else
-        test_passed "Exit code indicating failure when calling ${EMPFAENGER} with a huge number"
+	if egrep -q "${USAGEMSGREGEX}" "${STDERRFILENAME}"
+	then
+            test_passed "Exit code indicating failure and proper usage message printed to stderr when calling ${EMPFAENGER} with a huge number"
+	else
+	    test_failed "No usage message printed to stderr when calling ${EMPFAENGER} with a huge number (see ${STDERRFILENAME} for output on stderr)"
+	    RV=1
+	fi
     fi
     return $RV
 }
@@ -359,28 +454,29 @@ function test_5() {
     PID_EMPFAENGER=$!
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
+    if ! check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
     then
+	echo "check_files_equal() returned 1"
         RV=1
     fi
     return $RV
@@ -397,11 +493,11 @@ function test_6() {
     ${SENDER} -m 1000 < ${SMALL_TEXT_FILE} &
     PID_SENDER=$!
     sleep 5
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
@@ -409,19 +505,19 @@ function test_6() {
     PID_EMPFAENGER=$!
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
+    if ! check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
     then
         RV=1
     fi
@@ -441,27 +537,27 @@ function test_7() {
     PID_EMPFAENGER=$!
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
+    if ! check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
     then
         RV=1
     fi
@@ -481,27 +577,27 @@ function test_8() {
     PID_EMPFAENGER=$!
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
+    if ! check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
     then
         RV=1
     fi
@@ -510,7 +606,7 @@ function test_8() {
 
 #
 # Test 9: Transfer of small text file - start empfanger first => should block
-# 
+#
 function test_9() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 9: Transfer of small text file - reverse start order -----${EMPH_OFF}"
@@ -529,27 +625,27 @@ function test_9() {
     PID_SENDER=$!
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
+    if ! check_files_equal ${SMALL_TEXT_FILE} ${SMALL_TEXT_FILE_RESULT}
     then
         RV=1
     fi
@@ -558,7 +654,7 @@ function test_9() {
 
 #
 # Test 10: Transfer of small binary file containing char 255
-# 
+#
 function test_10() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 10: Transfer of small binary file containing char 255 -----${EMPH_OFF}"
@@ -569,27 +665,27 @@ function test_10() {
     PID_EMPFAENGER=$!
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_BINARY_FILE} ${SMALL_BINARY_FILE_RESULT}
+    if ! check_files_equal ${SMALL_BINARY_FILE} ${SMALL_BINARY_FILE_RESULT}
     then
         RV=1
     fi
@@ -598,7 +694,7 @@ function test_10() {
 
 #
 # Test 11: Test proper handling of EINTR
-# 
+#
 function test_11() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 11: Test proper handling of EINTR -----${EMPH_OFF}"
@@ -625,27 +721,27 @@ function test_11() {
     kill -CONT ${PID_SENDER} # continue sender => should simply restart P()
     sleep 5
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${SMALL_BINARY_FILE} ${SMALL_BINARY_FILE_RESULT}
+    if ! check_files_equal ${SMALL_BINARY_FILE} ${SMALL_BINARY_FILE_RESULT}
     then
         RV=1
     fi
@@ -654,7 +750,7 @@ function test_11() {
 
 #
 # Test 12: Transfer of huge binary file
-# 
+#
 function test_12() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 12: Transfer of huge binary file -----${EMPH_OFF}"
@@ -670,27 +766,27 @@ function test_12() {
         sleep ${DELAYTIME}
     fi
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${HUGE_BINARY_FILE} ${HUGE_BINARY_FILE_RESULT}
+    if ! check_files_equal ${HUGE_BINARY_FILE} ${HUGE_BINARY_FILE_RESULT}
     then
         RV=1
     fi
@@ -699,7 +795,7 @@ function test_12() {
 
 #
 # Test 13: Transfer of huge binary file - stop and continue processes in between
-# 
+#
 function test_13() {
     local RV=0
     echo -e "${PROGNAME}: ${EMPH_ON}----- Test 13: Transfer of huge binary file - stop and continue processes in between -----${EMPH_OFF}"
@@ -726,27 +822,27 @@ function test_13() {
         sleep ${DELAYTIME}
     fi
     record_resources_after
-    if check_process_dead ${PID_SENDER} ${SENDER}
+    if ! check_process_dead ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_process_dead ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_SENDER} ${SENDER}
+    if ! check_exit_status_ok ${PID_SENDER} ${SENDER}
     then
         RV=1
     fi
-    if check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
+    if ! check_exit_status_ok ${PID_EMPFAENGER} ${EMPFAENGER}
     then
         RV=1
     fi
-    if check_resources
+    if ! check_resources
     then
         RV=1
     fi
-    if check_files_equal ${HUGE_BINARY_FILE} ${HUGE_BINARY_FILE_RESULT}
+    if ! check_files_equal ${HUGE_BINARY_FILE} ${HUGE_BINARY_FILE_RESULT}
     then
         RV=1
     fi
@@ -756,9 +852,9 @@ function test_13() {
 #
 # ------------------------------------------------------------------------------------- process args ---
 #
-readonly SHORT_OPTS="hs:e:t:f"
+readonly SHORT_OPTS="hs:e:t:fc:"
 readonly LONG_OPTS="help,sender:,empfaenger:,time:,force,color:"
-# print nothing and just check for errors terminating the script 
+# print nothing and just check for errors terminating the script
 if ! getopt --quiet-output -o "$SHORT_OPTS" --longoptions "$LONG_OPTS" -- "$@"; then
     show_usage 1
 fi
@@ -788,7 +884,7 @@ while [ "$#" -gt 0 ]; do
         IGNORE_FAILED_TESTS=1
         shift
         ;;
-	--color)
+	-c|--color)
         COLOR="$2"
 #	    echo "$2"
         shift 2
@@ -841,6 +937,8 @@ fi
 
 echo "${PROGNAME}: Placing temporary files in ${MYTMPDIR}"
 
+echo "${PROGNAME}: Using coloring ${COLOR}"
+
 case "$COLOR" in
     auto)
     if ! [ -t 1 ]; then # no colors if stdout is not on a tty
@@ -875,14 +973,14 @@ trap "{ echo ${PROGNAME}: Terminated by signal - cleaning up ...; clean_up 1; }"
 # -------------------------------------------------------------------------------------------- Tests ---
 #
 
-RV=1
+RV=0
 if [ "$#" -eq "0" ]
 then
     for i in ${TESTS}
     do
-        if test_$i
+        if ! test_$i
         then
-            RV=0
+            RV=1
         fi
     done
 else
@@ -895,9 +993,9 @@ else
     done
     for i
     do
-        if test_$i
+        if ! test_$i
         then
-            RV=0
+            RV=1
         fi
     done
 fi
@@ -908,4 +1006,3 @@ then
 else
     echo -e "${PROGNAME}: ${EMPH_FAILED}THERE IS SOMETHING TO IMPROVE! :-(${EMPH_OFF}"
 fi
-
