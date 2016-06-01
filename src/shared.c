@@ -80,7 +80,7 @@ long shared_parse_size(int argc, char *argv[]) {
  * @brief writes data from the stream to the ring buffer-based shared memory
  *
  * @param shm_size the size of the shared memory
- * @param stream the stream to be processed
+ * @param stream the stream to take as input
  *
  * @returns 0 if everything went well and -1 in case of error
  */
@@ -148,6 +148,7 @@ int shared_send(long shm_size, FILE *stream) {
  * @brief prints data from the ring buffer-based shared memory
  *
  * @param shm_size the size of the shared memory
+ * @param stream the stream to take as output
  *
  * @returns 0 if everything went well and -1 in case of error
  */
@@ -206,13 +207,13 @@ int shared_receive(long shm_size, FILE *stream) {
     }
   } while (output != EOF);
 
-  shared_cleanup(&data);
-
-  /* force a write of the buffered stdout */
-  if (fflush(stdout) == EOF) {
+  /* force a write of the possibly buffered stream */
+  if (fflush(stream) == EOF) {
     warn("fflush");
     return -1;
   }
+
+  shared_cleanup(&data);
 
   return 0;
 }
@@ -239,8 +240,8 @@ static int shared_init(long shm_size, shared_t *data) {
   struct sigaction sa;
   sa.sa_handler = shared_signal;
 
-  /* restart system calls if interrupted by handler */
-  sa.sa_flags = SA_RESTART;
+  /* restore the default signal action upon the handler start */
+  sa.sa_flags = SA_RESETHAND;
 
   /* block signals during handling */
   sigfillset(&sa.sa_mask);
@@ -387,12 +388,16 @@ static void shared_remove(shared_t *data) {
 }
 
 /**
- * @brief handles signals by performing a cleanup before exit
+ * @brief handles signals by performing a cleanup first
  *
  * @param signum the signal number
  */
 static void shared_signal(int signum) {
   warnx("Caught signal %d", signum);
   shared_cleanup(data_ptr);
-  _exit(EXIT_FAILURE);
+
+  /* send the signal again, but perform the default action (reset by SA_RESETHAND) */
+  if (raise(signum) != 0) {
+    warn("raise");
+  }
 }
