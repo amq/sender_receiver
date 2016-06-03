@@ -11,16 +11,13 @@ language: c
 compiler:
   - gcc
   - gcc-5
-  - clang-3.8
 addons:
   apt:
     sources:
       - ubuntu-toolchain-r-test # gcc
-      - llvm-toolchain-precise-3.8 # clang
       - george-edison55-precise-backports # cmake
     packages:
       - gcc-5
-      - clang-3.8
       - cmake
       - cmake-data
 
