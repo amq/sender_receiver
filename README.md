@@ -16,7 +16,7 @@ make
 
 Usage
 ```
-./sender -m <buffer_size> < data.txt
+./sender -m <buffer_size> < data
 ./receiver -m <buffer_size>
 ```
 
