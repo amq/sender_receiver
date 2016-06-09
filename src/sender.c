@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 
   if ((shm_size = shared_parse_size(argc, argv)) == -1) {
     /* error is printed by shared_parse_size() */
-    fprintf(stderr, "Usage: ./sender -m <buffer_size> < data\n");
+    fprintf(stderr, "Usage: %s -m <buffer_size> < data\n", argv[0]);
     return EXIT_FAILURE;
   }
 

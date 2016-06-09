@@ -285,13 +285,13 @@ static int shared_init(long shm_size, shared_t *data) {
   }
 
   /* set the size of the shared memory object and fill it with 0 */
-  if (ftruncate(data->shm_fd, shm_size * sizeof(*data->shm_buffer) + 1) == -1) {
+  if (ftruncate(data->shm_fd, (shm_size + 1) * sizeof(*data->shm_buffer)) == -1) {
     warn("ftruncate");
     return -1;
   }
 
   /* map the memory object so that it can be used, similar to malloc */
-  if ((data->shm_buffer = mmap(NULL, shm_size * sizeof(*data->shm_buffer) + 1,
+  if ((data->shm_buffer = mmap(NULL, (shm_size + 1) * sizeof(*data->shm_buffer),
                                PROT_READ | PROT_WRITE, //
                                MAP_SHARED, data->shm_fd, 0)) == MAP_FAILED) {
     warn("mmap");
